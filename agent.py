@@ -147,23 +147,28 @@ def run_agent(user_prompt: str) -> str:
 
         messages.append(response_msg)
 
-        tool_call = response_msg.tool_calls[0]
-        function_name = tool_call.function.name
+        for tool_call in response_msg.tool_calls:
+            function_name = tool_call.function.name
 
-        if function_name in available_functions:
-            function_to_call = available_functions[function_name]
-            function_args = json.loads(tool_call.function.arguments)
+            if function_name in available_functions:
+                function_to_call = available_functions[function_name]
+                try:
+                    function_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError as e:
+                    function_result = f"ERROR: Invalid JSON arguments from model for {function_name}. Details: {e}"
+                else:
+                    function_result = function_to_call(**function_args)
+            else:
+                function_result = f"ERROR: Unknown tool '{function_name}'."
 
-            function_result = function_to_call(**function_args)
-
-        messages.append(
-            {
-                "tool_call_id": tool_call.id,
-                "role": "tool",
-                "name": function_name,
-                "content": str(function_result),
-            }
-        )
+            messages.append(
+                {
+                    "tool_call_id": tool_call.id,
+                    "role": "tool",
+                    "name": function_name,
+                    "content": str(function_result),
+                }
+            )
 
         final_response = client.chat.completions.create(
             model="gpt-4o",
@@ -174,6 +179,6 @@ def run_agent(user_prompt: str) -> str:
 
 
 if __name__ == "__main__":
-    result = run_agent("What is 56 plus 98?")
+    result = run_agent("What is 56 plus 98 and also how's the weather in London?")
     print("\n--- FINAL RESPONSE ---")
     print(result)
