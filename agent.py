@@ -1,9 +1,12 @@
+###########################################################
+##                                                       ##
+##  The model should decide when and which tool to call  ##
+##                                                       ##
+###########################################################
 from openai import OpenAI
 import json
 
-# -------------------------------------------------------
-# Initialize OpenAI Client
-# -------------------------------------------------------
+
 try:
     client = OpenAI()
 except Exception:
@@ -11,9 +14,6 @@ except Exception:
     exit()
 
 
-# -------------------------------------------------------
-# System Prompt
-# -------------------------------------------------------
 SYSTEM_PROMPT = (
     "You are a highly skilled math agent. "
     "Only use the provided 'add' and 'subtract' tools for all calculations involving explicit numeric values. "
@@ -22,9 +22,6 @@ SYSTEM_PROMPT = (
 )
 
 
-# -------------------------------------------------------
-# Tool Implementations (Python functions)
-# -------------------------------------------------------
 def add(a: float | None, b: float | None) -> float | str:
     """Adds two numbers and returns the result."""
     if a is None or b is None:
@@ -67,9 +64,6 @@ available_functions = {
 }
 
 
-# -------------------------------------------------------
-# Tool Schemas
-# -------------------------------------------------------
 ADD_SCHEMA = {
     "type": "function",
     "function": {
@@ -124,9 +118,6 @@ WEATHER_TOOL_SCHEMA = {
 TOOLS = [ADD_SCHEMA, SUBTRACT_SCHEMA, WEATHER_TOOL_SCHEMA]
 
 
-# -------------------------------------------------------
-# MAIN AGENT FUNCTION
-# -------------------------------------------------------
 def run_agent(user_prompt: str) -> str:
     """
     Runs a full agent cycle:
@@ -141,59 +132,48 @@ def run_agent(user_prompt: str) -> str:
         {"role": "user", "content": user_prompt},
     ]
 
-    # --- FIRST CALL: Decide if tool is needed ---
-    first_response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        tools=TOOLS,
-        tool_choice="auto",
-    )
+    while True:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
 
-    first_msg = first_response.choices[0].message
+        response_msg = response.choices[0].message
 
-    # NO tool call → return answer directly
-    if not first_msg.tool_calls:
-        return first_msg.content
+        if not response_msg.tool_calls:
+            return response_msg.content
 
-    # --- TOOL CALL HAPPENS ---
-    tool_call = first_msg.tool_calls[0]
-    function_name = tool_call.function.name
-    python_function = available_functions[function_name]
-    function_args = json.loads(tool_call.function.arguments)
+        messages.append(response_msg)
 
-    # Execute Python function
-    # try:
-    function_result = python_function(**function_args)
-    # except TypeError:
-    #     function_result = python_function(
-    #         function_args.get("a"),
-    #         function_args.get("b"),
-    #     )
+        tool_call = response_msg.tool_calls[0]
+        function_name = tool_call.function.name
 
-    # Add tool call + result to conversation
-    messages.append(first_msg)
-    messages.append(
-        {
-            "tool_call_id": tool_call.id,
-            "role": "tool",
-            "name": function_name,
-            "content": str(function_result),
-        }
-    )
+        if function_name in available_functions:
+            function_to_call = available_functions[function_name]
+            function_args = json.loads(tool_call.function.arguments)
 
-    # --- SECOND CALL: Model produces final answer ---
-    final_response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-    )
+            function_result = function_to_call(**function_args)
 
-    return final_response.choices[0].message.content
+        messages.append(
+            {
+                "tool_call_id": tool_call.id,
+                "role": "tool",
+                "name": function_name,
+                "content": str(function_result),
+            }
+        )
+
+        final_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+        )
+
+        return final_response.choices[0].message.content
 
 
-# -------------------------------------------------------
-# Example Usage
-# -------------------------------------------------------
 if __name__ == "__main__":
-    result = run_agent("How is the weather in Delhi?")
+    result = run_agent("What is 56 plus 98?")
     print("\n--- FINAL RESPONSE ---")
     print(result)
