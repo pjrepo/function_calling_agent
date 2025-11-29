@@ -1,184 +1,73 @@
-###########################################################
-##                                                       ##
-##  The model should decide when and which tool to call  ##
-##                                                       ##
-###########################################################
-from openai import OpenAI
 import json
+from openai import OpenAI
+
+from config import SYSTEM_PROMPT
+from tools import AVAILABLE_FUNCTIONS, TOOLS
 
 
-try:
-    client = OpenAI()
-except Exception:
-    print("Error: Could not initialize OpenAI client.")
-    exit()
+class Agent:
+    def __init__(self, model: str = "gpt-4o"):
+        try:
+            self.client = OpenAI()
+        except Exception:
+            print("Error: Could not initialize OpenAI client.")
+            exit()
 
+        self.model = model
 
-SYSTEM_PROMPT = (
-    "You are a highly skilled math agent. "
-    "Only use the provided 'add' and 'subtract' tools for all calculations involving explicit numeric values. "
-    "If the user does not give enough numbers to perform a calculation, do NOT call a tool—simply explain what information is missing. "
-    "Use 'get_current_weather' whenever the user asks about weather."
-)
+    def _execute_tool(self, tool_call):
+        """Executes a tool call by name."""
+        function_name = tool_call.function.name
 
+        if function_name not in AVAILABLE_FUNCTIONS:
+            return f"ERROR: Unknown tool '{function_name}'."
 
-def add(a: float | None, b: float | None) -> float | str:
-    """Adds two numbers and returns the result."""
-    if a is None or b is None:
-        return "ERROR: Both 'a' and 'b' are required."
-    try:
-        return float(a) + float(b)
-    except (ValueError, TypeError):
-        return "ERROR: Inputs must be numerical."
+        try:
+            function_args = json.loads(tool_call.function.arguments)
+        except json.JSONDecodeError as e:
+            return f"ERROR: Invalid JSON for {function_name}. Details: {e}"
 
+        return AVAILABLE_FUNCTIONS[function_name](**function_args)
 
-def subtract(a: float | None, b: float | None) -> float | str:
-    """Subtracts b from a and returns the result."""
-    if a is None or b is None:
-        return "ERROR: Both 'a' and 'b' are required."
-    try:
-        return float(a) - float(b)
-    except (ValueError, TypeError):
-        return "ERROR: Inputs must be numerical."
+    def run(self, user_prompt: str) -> str:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
 
-
-def get_current_weather(city: str, unit: str = "celsius") -> str:
-    """Simulated weather lookup."""
-    city_lower = city.lower()
-
-    if "tokyo" in city_lower:
-        temp = 15 if unit.lower() == "celsius" else 59
-        return f"The weather in Tokyo is {temp}°{unit} and sunny ☀️."
-
-    if "london" in city_lower:
-        temp = 8 if unit.lower() == "celsius" else 46
-        return f"The weather in London is {temp}°{unit} and cloudy ☁️."
-
-    return f"Weather data for {city} not available."
-
-
-available_functions = {
-    "add": add,
-    "subtract": subtract,
-    "get_current_weather": get_current_weather,
-}
-
-
-ADD_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "add",
-        "description": "Adds two numbers.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "a": {"type": "number"},
-                "b": {"type": "number"},
-            },
-            "required": ["a", "b"],
-        },
-    },
-}
-
-SUBTRACT_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "subtract",
-        "description": "Subtracts one number from another.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "a": {"type": "number"},
-                "b": {"type": "number"},
-            },
-            "required": ["a", "b"],
-        },
-    },
-}
-
-WEATHER_TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "get_current_weather",
-        "description": "Gets the current weather for a city.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {"type": "string"},
-                "unit": {
-                    "type": "string",
-                    "enum": ["celsius", "fahrenheit"],
-                },
-            },
-            "required": ["city"],
-        },
-    },
-}
-
-TOOLS = [ADD_SCHEMA, SUBTRACT_SCHEMA, WEATHER_TOOL_SCHEMA]
-
-
-def run_agent(user_prompt: str) -> str:
-    """
-    Runs a full agent cycle:
-    - Sends prompt to model
-    - If tool call requested → executes tool
-    - Sends result back to model
-    - Returns final text response
-    """
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
-
-    while True:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-        )
-
-        response_msg = response.choices[0].message
-
-        if not response_msg.tool_calls:
-            return response_msg.content
-
-        messages.append(response_msg)
-
-        for tool_call in response_msg.tool_calls:
-            function_name = tool_call.function.name
-
-            if function_name in available_functions:
-                function_to_call = available_functions[function_name]
-                try:
-                    function_args = json.loads(tool_call.function.arguments)
-                except json.JSONDecodeError as e:
-                    function_result = f"ERROR: Invalid JSON arguments from model for {function_name}. Details: {e}"
-                else:
-                    function_result = function_to_call(**function_args)
-            else:
-                function_result = f"ERROR: Unknown tool '{function_name}'."
-
-            messages.append(
-                {
-                    "tool_call_id": tool_call.id,
-                    "role": "tool",
-                    "name": function_name,
-                    "content": str(function_result),
-                }
+        while True:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
             )
 
-        final_response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-        )
+            response_msg = response.choices[0].message
 
-        return final_response.choices[0].message.content
+            # If no tool call → final output
+            if not response_msg.tool_calls:
+                return response_msg.content
 
+            messages.append(response_msg)
 
-if __name__ == "__main__":
-    result = run_agent("What is 56 plus 98 and also how's the weather in London?")
-    print("\n--- FINAL RESPONSE ---")
-    print(result)
+            # Execute tools
+            for tool_call in response_msg.tool_calls:
+                tool_result = self._execute_tool(tool_call)
+
+                messages.append(
+                    {
+                        "tool_call_id": tool_call.id,
+                        "role": "tool",
+                        "name": tool_call.function.name,
+                        "content": str(tool_result),
+                    }
+                )
+
+            # Second pass: model produces final answer
+            final = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+            )
+
+            return final.choices[0].message.content
