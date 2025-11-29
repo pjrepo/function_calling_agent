@@ -11,7 +11,7 @@ except Exception:
 
 SYSTEM_PROMPT = "You are a highly skilled math agent.  Only use the provided 'add' and 'subtract' tools for all calculations involving explicit numeric values. If the user does not give enough numbers to perform a calculation, do NOT call a tool—simply explain what information is missing."
 
-user_prompt = "What is 456 minus 123?"
+user_prompt = "What is 456 minus x?"
 
 
 def add(a: float | None, b: float | None) -> float | str:
@@ -92,6 +92,8 @@ response = client.chat.completions.create(
     tool_choice="auto",
 )
 
+print(response.choices[0].message.content)
+
 
 if response.choices[0].message.tool_calls:
     message = response.choices[0].message
@@ -132,4 +134,6 @@ if response.choices[0].message.tool_calls:
     print("\n--- FINAL AGENT RESPONSE ---")
     print(final_response.choices[0].message.content)
 else:
-    print("\n--- Add the required inputs ---")
+    no_tool_call_message = response.choices[0].message
+    print("\n--- MODEL TEXT RESPONSE (NO TOOL CALL) ---")
+    print(no_tool_call_message.content)
